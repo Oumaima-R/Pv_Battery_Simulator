@@ -6,9 +6,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from datetime import datetime
-import base64
-import io
+import plotly.express as px
+from plotly.subplots import make_subplots
 
 # Import des modules
 from config import (
@@ -612,4 +611,5 @@ def get_table_download_link(df, filename):
     csv = df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
     href = f'<a href="data:file/csv;base64,{b64}" download="{filename}">📥 Télécharger CSV</a>'
+
     return href
