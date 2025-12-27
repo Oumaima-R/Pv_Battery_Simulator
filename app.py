@@ -1,615 +1,791 @@
-"""
-Application Streamlit principale - Simulateur PV+Battery
-"""
-
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-
-# Import des modules
-from config import (
-    DEFAULT_PARAMS, DEFAULT_LOAD_PROFILE, 
-    CITIES_IRRADIATION, BATTERY_TECHNOLOGIES, SCENARIOS
-)
-from modules.consumption import ConsumptionAnalyzer
-from modules.pv_system import PVSystem
-from modules.battery_system import BatterySystem
-from modules.simulation import ScenarioSimulator
-from modules.visualization import Visualization
+import numpy as np
+from datetime import datetime
+import io
+import os
 
 # Configuration de la page
 st.set_page_config(
-    page_title="Simulateur PV + Batterie - Projet Stockage",
+    page_title="Simulateur PV + Batterie - Analyse Complète",
     page_icon="🔋",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# CSS personnalisé
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1E3A8A;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .sub-header {
-        font-size: 1.8rem;
-        color: #3B82F6;
-        margin-top: 1.5rem;
-        margin-bottom: 1rem;
-    }
-    .metric-card {
-        background-color: #F8FAFC;
-        padding: 1rem;
-        border-radius: 10px;
-        border-left: 5px solid #3B82F6;
-        margin-bottom: 1rem;
-    }
-    .scenario-card {
-        background-color: #F0F9FF;
-        padding: 1rem;
-        border-radius: 10px;
-        border: 2px solid #3B82F6;
-        margin-bottom: 1rem;
-    }
-    .download-button {
-        background-color: #10B981;
-        color: white;
-        padding: 0.5rem 1rem;
-        border-radius: 5px;
-        border: none;
-        cursor: pointer;
-    }
-    .download-button:hover {
-        background-color: #059669;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Initialisation de l'état de session
-if 'simulator' not in st.session_state:
-    st.session_state.simulator = None
-if 'scenarios' not in st.session_state:
-    st.session_state.scenarios = None
-if 'comparison_df' not in st.session_state:
-    st.session_state.comparison_df = None
-
 # Titre principal
-st.markdown('<h1 class="main-header">🔋 Simulateur PV + Batterie - Projet de Stockage</h1>', 
-            unsafe_allow_html=True)
-st.markdown("""
-*Dimensionnement et simulation d'un système photovoltaïque résidentiel avec stockage d'énergie*
-""")
+st.title("🔋 SIMULATEUR PV + BATTERIE - ANALYSE COMPLÈTE")
+st.markdown("**Analyse détaillée avec tous les indicateurs de performance**")
 
-# Sidebar pour les paramètres
+# ===== DONNÉES DE BASE DU RAPPORT =====
+BASE_DATA = {
+    "annual_consumption": 4479.3,  # kWh/an
+    "pv_production": 3562.5,  # kWh/an
+    "pv_coverage": 79.5,  # %
+    "battery_capacity": 5.5,  # kWh
+    "battery_usable": 4.44,  # kWh
+    "autonomy": 8.7,  # heures
+    "night_coverage": 102.5,  # %
+    "self_consumption": "85-90",  # %
+    "grid_reduction": 70,  # %
+}
+
+# ===== DONNÉES DÉTAILLÉES PAR SCÉNARIO =====
+SCENARIOS_DATA = {
+    "S0": {
+        "name": "Scénario 0",
+        "description": "Réseau seul (référence)",
+        "pv_energy": 0,
+        "battery_charge": 0,
+        "battery_discharge": 0,
+        "grid_import": 4479.3,
+        "grid_export": 0,
+        "energy_lost": 0,
+        "self_consumption_rate": 0,
+        "total_coverage": 0,
+        "grid_reduction": 0,
+        "cost": 671.9,
+        "tech": "Aucune"
+    },
+    "S1": {
+        "name": "Scénario 1",
+        "description": "PV seul",
+        "pv_energy": 3562.5,
+        "battery_charge": 0,
+        "battery_discharge": 0,
+        "grid_import": 1791.7,
+        "grid_export": 712.5,
+        "energy_lost": 106.3,
+        "self_consumption_rate": 65,
+        "total_coverage": 79.5,
+        "grid_reduction": 60,
+        "cost": 268.8,
+        "tech": "PV seul"
+    },
+    "S2": {
+        "name": "Scénario 2",
+        "description": "PV + Plomb",
+        "pv_energy": 3562.5,
+        "battery_charge": 1425.0,
+        "battery_discharge": 1211.3,
+        "grid_import": 895.9,
+        "grid_export": 356.3,
+        "energy_lost": 213.7,
+        "self_consumption_rate": 75,
+        "total_coverage": 87.5,
+        "grid_reduction": 80,
+        "cost": 134.4,
+        "tech": "Plomb-acide"
+    },
+    "S3": {
+        "name": "Scénario 3",
+        "description": "PV + Li-ion",
+        "pv_energy": 3562.5,
+        "battery_charge": 1425.0,
+        "battery_discharge": 1353.8,
+        "grid_import": 671.9,
+        "grid_export": 178.1,
+        "energy_lost": 106.3,
+        "self_consumption_rate": 85,
+        "total_coverage": 91.5,
+        "grid_reduction": 85,
+        "cost": 100.8,
+        "tech": "Lithium-ion"
+    },
+    "S4": {
+        "name": "Scénario 4",
+        "description": "Optimisé",
+        "pv_energy": 3562.5,
+        "battery_charge": 1425.0,
+        "battery_discharge": 1425.0,
+        "grid_import": 447.9,
+        "grid_export": 89.1,
+        "energy_lost": 71.3,
+        "self_consumption_rate": 90,
+        "total_coverage": 94.5,
+        "grid_reduction": 90,
+        "cost": 67.2,
+        "tech": "Li-ion optimisé"
+    }
+}
+
+# ===== SIDEBAR =====
 with st.sidebar:
-    st.header("⚙️ Paramètres de Configuration")
+    st.header("⚙️ PARAMÈTRES")
     
-    # Section localisation
-    st.subheader("📍 Localisation")
-    selected_city = st.selectbox(
-        "Ville",
-        list(CITIES_IRRADIATION.keys()),
-        index=0
-    )
-    irradiation = CITIES_IRRADIATION[selected_city]
-    st.info(f"Irradiation annuelle: **{irradiation} kWh/m²**")
-    
-    # Section consommation
-    st.subheader("💡 Consommation Électrique")
+    # Paramètres de base
+    st.subheader("🏠 Consommation")
     annual_consumption = st.number_input(
         "Consommation annuelle (kWh)",
+        value=BASE_DATA["annual_consumption"],
         min_value=1000.0,
-        max_value=20000.0,
-        value=DEFAULT_PARAMS["annual_consumption"],
-        step=100.0,
-        help="Consommation électrique annuelle de la maison"
+        max_value=20000.0
     )
     
-    # Section PV
-    st.subheader("☀️ Système Photovoltaïque")
-    pv_power = st.slider(
-        "Puissance PV installée (kWc)",
-        1.0, 10.0, DEFAULT_PARAMS["pv_power"], 0.1,
-        help="Puissance crête du système PV"
-    )
-    pv_pr = st.slider(
-        "Performance Ratio (%)",
-        50, 90, DEFAULT_PARAMS["pv_pr"], 1,
-        help="Ratio de performance du système PV"
-    )
+    st.subheader("☀️ Système PV")
+    pv_power = st.slider("Puissance PV (kWc)", 1.0, 10.0, 2.5)
+    pv_pr = st.slider("Performance Ratio (%)", 50, 90, 75)
     
-    # Section batterie
-    st.subheader("🔋 Système de Stockage")
+    st.subheader("🔋 Système de stockage")
     battery_tech = st.selectbox(
-        "Technologie de batterie",
-        list(BATTERY_TECHNOLOGIES.keys()),
-        index=0
+        "Technologie",
+        ["Lithium-ion", "Plomb-acide", "Aucune"]
     )
     
-    # Paramètres selon la technologie
-    tech_params = BATTERY_TECHNOLOGIES[battery_tech]
-    if battery_tech == "Lithium-ion":
-        battery_capacity = st.number_input(
-            "Capacité batterie (kWh)",
-            1.0, 20.0, DEFAULT_PARAMS["battery_capacity_li"], 0.1
-        )
-        dod = st.slider(
-            "Depth of Discharge (DoD) %",
-            tech_params["dod_range"][0], 
-            tech_params["dod_range"][1],
-            DEFAULT_PARAMS["dod_li"], 1
-        )
-        efficiency = st.slider(
-            "Rendement aller-retour %",
-            tech_params["efficiency_range"][0],
-            tech_params["efficiency_range"][1],
-            DEFAULT_PARAMS["efficiency_li"], 1
-        )
-    else:  # Plomb-acide
-        battery_capacity = st.number_input(
-            "Capacité batterie (kWh)",
-            1.0, 30.0, DEFAULT_PARAMS["battery_capacity_pb"], 0.1
-        )
-        dod = st.slider(
-            "Depth of Discharge (DoD) %",
-            tech_params["dod_range"][0], 
-            tech_params["dod_range"][1],
-            DEFAULT_PARAMS["dod_pb"], 1
-        )
-        efficiency = st.slider(
-            "Rendement aller-retour %",
-            tech_params["efficiency_range"][0],
-            tech_params["efficiency_range"][1],
-            DEFAULT_PARAMS["efficiency_pb"], 1
+    if battery_tech != "Aucune":
+        battery_capacity = st.slider(
+            "Capacité batterie (kWh)", 
+            1.0, 20.0, 
+            BASE_DATA["battery_capacity"] if battery_tech == "Lithium-ion" else 10.0
         )
     
-    # Bouton de simulation
-    st.markdown("---")
-    if st.button("Lancer la Simulation", type="primary", use_container_width=True):
-        with st.spinner("Simulation en cours..."):
-            # Initialiser le simulateur
-            st.session_state.simulator = ScenarioSimulator(
-                annual_consumption=annual_consumption,
-                city=selected_city,
-                irradiation=irradiation,
-                load_profile_24h=DEFAULT_LOAD_PROFILE
-            )
-            
-            # Lancer les simulations
-            st.session_state.scenarios = st.session_state.simulator.simulate_all_scenarios(
-                pv_power_kw=pv_power,
-                pv_pr=pv_pr
-            )
-            
-            # Générer le tableau de comparaison
-            st.session_state.comparison_df = st.session_state.simulator.generate_comparison_table(
-                st.session_state.scenarios
-            )
-            
-            st.success("Simulation terminée avec succès !")
-    
-    # Bouton de réinitialisation
-    if st.button(" Réinitialiser", use_container_width=True):
-        st.session_state.simulator = None
-        st.session_state.scenarios = None
-        st.session_state.comparison_df = None
-        st.rerun()
+    # Bouton simulation
+    if st.button("🚀 LANCER L'ANALYSE", type="primary", use_container_width=True):
+        st.session_state.analyzed = True
 
-# Onglets principaux
+# ===== FONCTIONS DE VISUALISATION =====
+def create_energy_flow_chart():
+    """Crée un graphique des flux énergétiques"""
+    fig = go.Figure()
+    
+    # Données pour S4 (optimisé)
+    scenario = SCENARIOS_DATA["S4"]
+    
+    # Diagramme en barres empilées
+    categories = ["PV", "Batterie", "Réseau"]
+    positive = [scenario["pv_energy"], scenario["battery_discharge"], 0]
+    negative = [0, -scenario["battery_charge"], -scenario["grid_import"]]
+    
+    fig.add_trace(go.Bar(
+        name='Production/Apport',
+        x=categories,
+        y=positive,
+        marker_color=['orange', 'green', 'gray']
+    ))
+    
+    fig.add_trace(go.Bar(
+        name='Consommation/Stockage',
+        x=categories,
+        y=negative,
+        marker_color=['darkorange', 'darkgreen', 'darkgray']
+    ))
+    
+    fig.update_layout(
+        title="📊 Flux Énergétiques - Scénario Optimisé (S4)",
+        barmode='relative',
+        yaxis_title="Énergie (kWh/an)",
+        template="plotly_white",
+        height=400
+    )
+    
+    return fig
+
+def create_scenario_comparison_chart():
+    """Crée un graphique de comparaison des scénarios"""
+    scenarios = ["S0", "S1", "S2", "S3", "S4"]
+    
+    # Données pour le graphique
+    grid_import = [SCENARIOS_DATA[s]["grid_import"] for s in scenarios]
+    self_cons = [SCENARIOS_DATA[s]["self_consumption_rate"] for s in scenarios]
+    coverage = [SCENARIOS_DATA[s]["total_coverage"] for s in scenarios]
+    reduction = [SCENARIOS_DATA[s]["grid_reduction"] for s in scenarios]
+    
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=("Importation Réseau", "Autoconsommation", 
+                       "Couverture Totale", "Réduction Réseau"),
+        vertical_spacing=0.15,
+        horizontal_spacing=0.15
+    )
+    
+    # Graphique 1: Importation réseau
+    fig.add_trace(
+        go.Bar(
+            x=scenarios,
+            y=grid_import,
+            name="Import réseau",
+            marker_color=["red", "orange", "yellow", "lightgreen", "green"]
+        ),
+        row=1, col=1
+    )
+    
+    # Graphique 2: Autoconsommation
+    fig.add_trace(
+        go.Scatter(
+            x=scenarios,
+            y=self_cons,
+            mode='lines+markers',
+            name="Autoconsommation",
+            line=dict(color='blue', width=3),
+            marker=dict(size=10)
+        ),
+        row=1, col=2
+    )
+    
+    # Graphique 3: Couverture totale
+    fig.add_trace(
+        go.Scatter(
+            x=scenarios,
+            y=coverage,
+            mode='lines+markers',
+            name="Couverture",
+            line=dict(color='green', width=3),
+            marker=dict(size=10)
+        ),
+        row=2, col=1
+    )
+    
+    # Graphique 4: Réduction réseau
+    fig.add_trace(
+        go.Bar(
+            x=scenarios,
+            y=reduction,
+            name="Réduction",
+            marker_color=["gray", "lightblue", "blue", "darkblue", "navy"]
+        ),
+        row=2, col=2
+    )
+    
+    fig.update_layout(
+        title="📈 Comparaison des Scénarios (S0 à S4)",
+        showlegend=False,
+        height=600,
+        template="plotly_white"
+    )
+    
+    # Mise à jour des axes
+    fig.update_yaxes(title_text="kWh/an", row=1, col=1)
+    fig.update_yaxes(title_text="%", row=1, col=2)
+    fig.update_yaxes(title_text="%", row=2, col=1)
+    fig.update_yaxes(title_text="%", row=2, col=2)
+    
+    return fig
+
+def create_technology_comparison_chart():
+    """Crée un graphique de comparaison des technologies"""
+    tech_data = {
+        "Technologie": ["Aucune", "PV seul", "Plomb-acide", "Lithium-ion", "Li-ion optimisé"],
+        "Coût annuel (€)": [671.9, 268.8, 134.4, 100.8, 67.2],
+        "Autonomie (h)": [0, 0, 7.2, 8.7, 9.5],
+        "Rendement (%)": [0, 65, 75, 85, 90],
+        "Durée de vie (ans)": [0, 25, 5, 10, 12]
+    }
+    
+    df = pd.DataFrame(tech_data)
+    
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=("Coût annuel", "Autonomie", "Rendement", "Durée de vie"),
+        specs=[[{"type": "bar"}, {"type": "bar"}],
+               [{"type": "bar"}, {"type": "bar"}]]
+    )
+    
+    # Coût annuel
+    fig.add_trace(
+        go.Bar(
+            x=df["Technologie"],
+            y=df["Coût annuel (€)"],
+            name="Coût",
+            marker_color="red"
+        ),
+        row=1, col=1
+    )
+    
+    # Autonomie
+    fig.add_trace(
+        go.Bar(
+            x=df["Technologie"],
+            y=df["Autonomie (h)"],
+            name="Autonomie",
+            marker_color="blue"
+        ),
+        row=1, col=2
+    )
+    
+    # Rendement
+    fig.add_trace(
+        go.Bar(
+            x=df["Technologie"],
+            y=df["Rendement (%)"],
+            name="Rendement",
+            marker_color="green"
+        ),
+        row=2, col=1
+    )
+    
+    # Durée de vie
+    fig.add_trace(
+        go.Bar(
+            x=df["Technologie"],
+            y=df["Durée de vie (ans)"],
+            name="Durée vie",
+            marker_color="orange"
+        ),
+        row=2, col=2
+    )
+    
+    fig.update_layout(
+        title="🔧 Comparaison des Technologies de Stockage",
+        showlegend=False,
+        height=600,
+        template="plotly_white"
+    )
+    
+    return fig
+
+def create_radar_chart():
+    """Crée un graphique radar pour comparaison multicritère"""
+    scenarios = ["S0", "S1", "S2", "S3", "S4"]
+    criteria = ["Réduction", "Autoconsommation", "Couverture", "Économie", "Autonomie"]
+    
+    # Normalisation des données
+    normalized_data = {}
+    
+    for s in scenarios:
+        data = SCENARIOS_DATA[s]
+        values = [
+            data["grid_reduction"] / 100,  # Normalisé 0-1
+            data["self_consumption_rate"] / 100,
+            data["total_coverage"] / 100,
+            (671.9 - data["cost"]) / 671.9,  # Économie relative
+            (9.5 if s == "S4" else 8.7 if s == "S3" else 7.2 if s == "S2" else 0) / 10
+        ]
+        normalized_data[s] = values
+    
+    fig = go.Figure()
+    
+    colors = ["red", "orange", "yellow", "lightgreen", "green"]
+    
+    for i, s in enumerate(scenarios):
+        fig.add_trace(go.Scatterpolar(
+            r=normalized_data[s] + [normalized_data[s][0]],  # Fermer le polygone
+            theta=criteria + [criteria[0]],
+            name=f"Scénario {s[-1]}",
+            line=dict(color=colors[i], width=3),
+            fill='toself',
+            opacity=0.3
+        ))
+    
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 1]
+            )
+        ),
+        title="🎯 Analyse Multicritère des Scénarios",
+        showlegend=True,
+        height=500,
+        template="plotly_white"
+    )
+    
+    return fig
+
+# ===== ONGLETS PRINCIPAUX =====
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Analyse Consommation",
-    "⚡ Dimensionnement",
-    "🔄 Simulation Scénarios",
-    "📈 Résultats & Visualisations",
-    "📄 Rapport & Export"
+    "📊 INDICATEURS CLÉS",
+    "📈 COMPARAISON SCÉNARIOS",
+    "🔧 TECHNOLOGIES",
+    "🎯 ANALYSE MULTICRITÈRE",
+    "📥 EXPORT RAPPORT"
 ])
 
-# Onglet 1: Analyse Consommation
 with tab1:
-    st.markdown('<h2 class="sub-header">Analyse de la Consommation Résidentielle</h2>', 
-                unsafe_allow_html=True)
+    st.header("📊 INDICATEURS DE PERFORMANCE PAR SCÉNARIO")
     
-    if st.session_state.simulator:
-        consumption_data = st.session_state.simulator.consumption_data
+    # Tableau des indicateurs
+    indicators_data = []
+    for key, data in SCENARIOS_DATA.items():
+        indicators_data.append({
+            "Scénario": key,
+            "Description": data["description"],
+            "PV (kWh)": data["pv_energy"],
+            "Batt. Charge (kWh)": data["battery_charge"],
+            "Batt. Décharge (kWh)": data["battery_discharge"],
+            "Réseau Import (kWh)": data["grid_import"],
+            "Réseau Export (kWh)": data["grid_export"],
+            "Pertes (kWh)": data["energy_lost"],
+            "Autoconso. (%)": data["self_consumption_rate"],
+            "Couverture (%)": data["total_coverage"],
+            "Réduc. (%)": data["grid_reduction"]
+        })
+    
+    df_indicators = pd.DataFrame(indicators_data)
+    st.dataframe(df_indicators, use_container_width=True)
+    
+    # Graphique des flux énergétiques
+    st.subheader("📊 Flux Énergétiques")
+    st.plotly_chart(create_energy_flow_chart(), use_container_width=True)
+    
+    # Métriques clés
+    st.subheader("🎯 Indicateurs Clés du Système")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Consommation annuelle", f"{BASE_DATA['annual_consumption']:,.1f} kWh")
+        st.metric("Production PV", f"{BASE_DATA['pv_production']:,.1f} kWh")
+    
+    with col2:
+        st.metric("Couverture PV", f"{BASE_DATA['pv_coverage']}%")
+        st.metric("Autoconsommation", f"{BASE_DATA['self_consumption']}%")
+    
+    with col3:
+        st.metric("Batterie (utilisable)", f"{BASE_DATA['battery_usable']} kWh")
+        st.metric("Autonomie", f"{BASE_DATA['autonomy']} h")
+    
+    with col4:
+        st.metric("Couverture nuit", f"{BASE_DATA['night_coverage']}%")
+        st.metric("Réduction réseau", f"{BASE_DATA['grid_reduction']}%")
+
+with tab2:
+    st.header("📈 COMPARAISON DÉTAILLÉE DES SCÉNARIOS")
+    
+    st.plotly_chart(create_scenario_comparison_chart(), use_container_width=True)
+    
+    # Analyse détaillée par scénario
+    st.subheader("📋 Analyse par Scénario")
+    
+    selected_scenario = st.selectbox(
+        "Choisir un scénario pour analyse détaillée",
+        list(SCENARIOS_DATA.keys()),
+        format_func=lambda x: f"{x}: {SCENARIOS_DATA[x]['name']}"
+    )
+    
+    if selected_scenario:
+        data = SCENARIOS_DATA[selected_scenario]
         
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Consommation annuelle", f"{annual_consumption:,.0f} kWh")
-        
-        with col2:
-            st.metric("Consommation journalière", f"{consumption_data['daily_energy_kwh']:.1f} kWh/j")
-        
-        with col3:
-            st.metric("Puissance moyenne", f"{consumption_data['avg_power_w']:.0f} W")
-        
-        with col4:
-            st.metric("Pic de puissance", f"{consumption_data['peak_power_kw']:.2f} kW")
-        
-        # Graphique du profil de charge
-        st.markdown("#### Profil de Charge Journalier (Load Shape)")
-        load_chart = Visualization.create_load_shape_chart(
-            consumption_data["hourly_profile"],
-            "Profil de Charge Journalier de la Maison"
-        )
-        st.plotly_chart(load_chart, use_container_width=True)
-        
-        # Répartition jour/nuit
-        st.markdown("#### Répartition Jour/Nuit")
         col1, col2 = st.columns(2)
         
         with col1:
-            fig = go.Figure(data=[go.Pie(
-                labels=['Jour', 'Nuit'],
-                values=[consumption_data['day_energy_kwh'], consumption_data['night_energy_kwh']],
-                hole=0.4,
-                marker_colors=['#FFA500', '#1E3A8A']
-            )])
-            fig.update_layout(title_text="Répartition Journalière")
-            st.plotly_chart(fig, use_container_width=True)
+            st.metric("Importation réseau", f"{data['grid_import']:,.1f} kWh")
+            st.metric("Autoconsommation", f"{data['self_consumption_rate']}%")
+            st.metric("Pertes système", f"{data['energy_lost']:,.1f} kWh")
         
         with col2:
-            # Tableau des données
-            dist_data = {
-                "Période": ["Jour (6h-22h)", "Nuit (22h-6h)", "Total"],
-                "Énergie (kWh/j)": [
-                    consumption_data['day_energy_kwh'],
-                    consumption_data['night_energy_kwh'],
-                    consumption_data['daily_energy_kwh']
-                ],
-                "Pourcentage": [
-                    f"{consumption_data['day_percentage']:.1f}%",
-                    f"{consumption_data['night_percentage']:.1f}%",
-                    "100%"
-                ]
-            }
-            st.dataframe(pd.DataFrame(dist_data), use_container_width=True)
-    
-    else:
-        st.info("🟢 Configurez les paramètres et lancez la simulation pour voir les résultats.")
-
-# Onglet 2: Dimensionnement
-with tab2:
-    st.markdown('<h2 class="sub-header">Dimensionnement du Système</h2>', 
-                unsafe_allow_html=True)
-    
-    if st.session_state.simulator:
-        # Dimensionnement PV
-        st.markdown("#### ☀️ Dimensionnement du Système PV")
+            st.metric("Réduction réseau", f"{data['grid_reduction']}%")
+            st.metric("Couverture totale", f"{data['total_coverage']}%")
+            st.metric("Coût annuel", f"{data['cost']:,.1f} €")
         
-        pv_system = PVSystem(selected_city, irradiation)
-        pv_data = pv_system.calculate_pv_production(pv_power, pv_pr)
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Puissance installée", f"{pv_power} kWc")
-        
-        with col2:
-            st.metric("Production annuelle", f"{pv_data['annual_production_kwh']:,.0f} kWh")
-        
-        with col3:
-            st.metric("Facteur de capacité", f"{pv_data['capacity_factor']:.1f}%")
-        
-        with col4:
-            coverage = (pv_data['annual_production_kwh'] / annual_consumption) * 100
-            st.metric("Taux de couverture", f"{coverage:.1f}%")
-        
-        # Graphique production mensuelle
-        st.plotly_chart(
-            Visualization.create_pv_production_chart(pv_data["monthly_production"]),
-            use_container_width=True
-        )
-        
-        # Dimensionnement batterie
-        st.markdown("#### 🔋 Dimensionnement du Système de Stockage")
-        
-        battery = BatterySystem(battery_tech)
-        battery_data = battery.calculate_battery_size(
-            night_energy_kwh=st.session_state.simulator.consumption_data["night_energy_kwh"],
-            avg_power_kw=st.session_state.simulator.consumption_data["avg_power_w"] / 1000
-        )
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Capacité nominale", f"{battery_data['selected_capacity_kwh']} kWh")
-        
-        with col2:
-            st.metric("Capacité utilisable", f"{battery_data['usable_capacity_kwh']:.1f} kWh")
-        
-        with col3:
-            st.metric("Autonomie", f"{battery_data['autonomy_hours']:.1f} h")
-        
-        with col4:
-            st.metric("Couverture nuit", f"{battery_data['night_coverage_percent']:.1f}%")
-        
-        # Tableau des paramètres batterie
-        st.markdown("##### Paramètres de la Batterie")
-        battery_params = pd.DataFrame({
-            "Paramètre": ["Technologie", "DoD", "Rendement", "Durée de vie", "Cycles", "Coût estimé"],
-            "Valeur": [
-                battery_data["technology"],
-                f"{battery_data['dod']}%",
-                f"{battery_data['efficiency']}%",
-                f"{battery_data['lifetime_years']} ans",
-                f"{battery_data['cycles']:,}",
-                f"${battery_data['estimated_cost_usd']:,.0f}"
+        # Diagramme circulaire
+        if data['pv_energy'] > 0:
+            labels = ['Autoconsommation', 'Export réseau', 'Pertes', 'Charge batterie']
+            values = [
+                data['pv_energy'] * data['self_consumption_rate'] / 100,
+                data['grid_export'],
+                data['energy_lost'],
+                data['battery_charge']
             ]
-        })
-        st.dataframe(battery_params, use_container_width=True, hide_index=True)
-    
-    else:
-        st.info("🟢 Lancez la simulation pour voir le dimensionnement.")
+            
+            fig_pie = go.Figure(data=[go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.4,
+                marker_colors=['green', 'blue', 'red', 'orange']
+            )])
+            
+            fig_pie.update_layout(title=f"Répartition Production PV - {data['name']}")
+            st.plotly_chart(fig_pie, use_container_width=True)
 
-# Onglet 3: Simulation Scénarios
 with tab3:
-    st.markdown('<h2 class="sub-header">Simulation des Scénarios</h2>', 
-                unsafe_allow_html=True)
+    st.header("🔧 COMPARAISON DES TECHNOLOGIES DE STOCKAGE")
     
-    if st.session_state.scenarios:
-        # Description des scénarios
-        st.markdown("#### Description des Scénarios")
-        
-        for i in range(5):
-            with st.expander(f"**{SCENARIOS[i]['name']}** - {SCENARIOS[i]['description']}"):
-                scenario_data = st.session_state.scenarios[i]
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.metric(
-                        "Importation réseau", 
-                        f"{scenario_data['annual_grid_import_kwh']:,.0f} kWh"
-                    )
-                    st.metric(
-                        "Autoconsommation", 
-                        f"{scenario_data.get('self_consumption_percent', 0):.1f}%"
-                    )
-                
-                with col2:
-                    st.metric(
-                        "Réduction réseau", 
-                        f"{scenario_data.get('grid_reduction_percent', 0):.1f}%"
-                    )
-                    if 'pv_coverage_percent' in scenario_data:
-                        st.metric(
-                            "Couverture PV", 
-                            f"{scenario_data['pv_coverage_percent']:.1f}%"
-                        )
-                    elif 'total_coverage_percent' in scenario_data:
-                        st.metric(
-                            "Couverture totale", 
-                            f"{scenario_data['total_coverage_percent']:.1f}%"
-                        )
-        
-        # Simulation détaillée par scénario
-        st.markdown("#### Simulation Détaillée")
-        selected_scenario = st.selectbox(
-            "Choisir un scénario pour visualisation détaillée",
-            list(st.session_state.scenarios.keys()),
-            format_func=lambda x: SCENARIOS[x]["name"]
-        )
-        
-        if selected_scenario is not None:
-            scenario_data = st.session_state.scenarios[selected_scenario]
-            
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                # Diagramme de Sankey
-                sankey_chart = Visualization.create_energy_flow_chart(scenario_data)
-                st.plotly_chart(sankey_chart, use_container_width=True)
-            
-            with col2:
-                # Tableau des indicateurs
-                indicators = []
-                for key, value in scenario_data.items():
-                    if any(x in key.lower() for x in ['kwh', 'percent', 'usd', 'kw']):
-                        if isinstance(value, (int, float)):
-                            if 'percent' in key:
-                                indicators.append((key, f"{value:.1f}%"))
-                            elif 'usd' in key:
-                                indicators.append((key, f"${value:,.0f}"))
-                            elif 'kwh' in key and value > 100:
-                                indicators.append((key, f"{value:,.0f}"))
-                            else:
-                                indicators.append((key, f"{value:.2f}"))
-                
-                df_indicators = pd.DataFrame(indicators, columns=["Indicateur", "Valeur"])
-                st.dataframe(df_indicators, use_container_width=True, hide_index=True)
+    st.plotly_chart(create_technology_comparison_chart(), use_container_width=True)
     
-    else:
-        st.info("🟢 Lancez la simulation pour voir les scénarios.")
+    # Tableau comparatif technologies
+    st.subheader("📋 Caractéristiques Techniques")
+    
+    tech_comparison = {
+        "Paramètre": ["DoD typique", "Rendement", "Durée de vie", "Cycles", "Coût", "Encombrement", "Maintenance"],
+        "Aucune": ["-", "-", "-", "-", "0 €", "-", "-"],
+        "PV seul": ["-", "65-70%", "25 ans", "-", "1.2 €/W", "Faible", "Faible"],
+        "Plomb-acide": ["50%", "80-85%", "3-5 ans", "500-800", "200 €/kWh", "Élevé", "Élevée"],
+        "Lithium-ion": ["80-90%", "90-95%", "8-12 ans", "3000-6000", "500 €/kWh", "Faible", "Faible"],
+        "Li-ion optimisé": ["85%", "95%", "10-15 ans", "4000-8000", "450 €/kWh", "Très faible", "Nulle"]
+    }
+    
+    df_tech = pd.DataFrame(tech_comparison)
+    st.dataframe(df_tech, use_container_width=True)
+    
+    # Recommandation
+    st.subheader("✅ Recommandation Technologique")
+    
+    st.success("""
+    **Technologie recommandée : LITHIUM-ION**
+    
+    **Pourquoi ?**
+    - ✓ Rendement élevé (95%)
+    - ✓ Longue durée de vie (10-15 ans)
+    - ✓ Faible encombrement
+    - ✓ Pas de maintenance
+    - ✓ DoD élevé (85%)
+    - ✓ Meilleur rapport performance/coût à long terme
+    """)
 
-# Onglet 4: Résultats & Visualisations
 with tab4:
-    st.markdown('<h2 class="sub-header">Résultats & Visualisations</h2>', 
-                unsafe_allow_html=True)
+    st.header("🎯 ANALYSE MULTICRITÈRE ET RECOMMANDATION")
     
-    if st.session_state.comparison_df is not None:
-        # Tableau de comparaison
-        st.markdown("#### 📊 Tableau Comparatif des Scénarios")
-        st.dataframe(st.session_state.comparison_df, use_container_width=True)
-        
-        # Graphiques de comparaison
-        st.markdown("#### 📈 Graphiques de Comparaison")
-        comparison_chart = Visualization.create_scenario_comparison_chart(
-            st.session_state.comparison_df
+    st.plotly_chart(create_radar_chart(), use_container_width=True)
+    
+    # Calcul du score global
+    st.subheader("🏆 Classement des Scénarios")
+    
+    scores = []
+    for key, data in SCENARIOS_DATA.items():
+        score = (
+            data["grid_reduction"] * 0.3 +  # Poids 30%
+            data["self_consumption_rate"] * 0.25 +  # Poids 25%
+            data["total_coverage"] * 0.2 +  # Poids 20%
+            ((671.9 - data["cost"]) / 671.9 * 100) * 0.15 +  # Poids 15%
+            (8.7 if "S3" in key else 9.5 if "S4" in key else 7.2 if "S2" in key else 0) * 10 * 0.1  # Poids 10%
         )
-        st.plotly_chart(comparison_chart, use_container_width=True)
+        scores.append({
+            "Scénario": key,
+            "Nom": data["name"],
+            "Score": round(score, 1),
+            "Technologie": data["tech"]
+        })
+    
+    df_scores = pd.DataFrame(scores).sort_values("Score", ascending=False)
+    df_scores["Rang"] = range(1, len(df_scores) + 1)
+    
+    st.dataframe(df_scores[["Rang", "Scénario", "Nom", "Score", "Technologie"]], use_container_width=True)
+    
+    # Meilleur scénario
+    best = df_scores.iloc[0]
+    
+    st.subheader("🏅 SCÉNARIO RECOMMANDÉ")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.success(f"""
+        **{best['Nom']} ({best['Scénario']})**
         
-        # Analyse des performances
-        st.markdown("#### 📋 Analyse des Performances")
+        **Score global : {best['Score']}/100**
         
-        # Trouver le meilleur scénario
-        comparison_df = st.session_state.comparison_df
-        best_reduction_idx = comparison_df["Réduction réseau (%)"].idxmax()
-        best_scenario = comparison_df.loc[best_reduction_idx]
+        **Performance :**
+        - Réduction réseau : {SCENARIOS_DATA[best['Scénario']]['grid_reduction']}%
+        - Autoconsommation : {SCENARIOS_DATA[best['Scénario']]['self_consumption_rate']}%
+        - Couverture totale : {SCENARIOS_DATA[best['Scénario']]['total_coverage']}%
+        - Économie annuelle : {671.9 - SCENARIOS_DATA[best['Scénario']]['cost']:,.1f} €
+        """)
+    
+    with col2:
+        # Diagramme de score
+        categories = ['Réduction', 'Autoconso.', 'Couverture', 'Économie', 'Autonomie']
+        values = [
+            SCENARIOS_DATA[best['Scénario']]['grid_reduction'],
+            SCENARIOS_DATA[best['Scénario']]['self_consumption_rate'],
+            SCENARIOS_DATA[best['Scénario']]['total_coverage'],
+            ((671.9 - SCENARIOS_DATA[best['Scénario']]['cost']) / 671.9) * 100,
+            85 if best['Scénario'] == "S4" else 75
+        ]
         
-        col1, col2, col3 = st.columns(3)
+        fig_score = go.Figure(data=go.Scatterpolar(
+            r=values,
+            theta=categories,
+            fill='toself',
+            line=dict(color='green', width=3)
+        ))
         
-        with col1:
-            st.metric(
-                "Meilleur scénario",
-                best_scenario["Scénario"]
-            )
-        
-        with col2:
-            st.metric(
-                "Réduction réseau maximale",
-                f"{best_scenario['Réduction réseau (%)']:.1f}%"
-            )
-        
-        with col3:
-            st.metric(
-                "Autoconsommation maximale",
-                f"{max(comparison_df['Autoconsommation (%)']):.1f}%"
-            )
-        
-        # Graphique radar pour comparaison multicritère
-        st.markdown("#### 📊 Analyse Multicritère")
-        
-        # Normalisation des données
-        criteria = ['Autoconsommation (%)', 'Réduction réseau (%)', 'Couverture totale (%)']
-        normalized_data = []
-        
-        for idx, row in comparison_df.iterrows():
-            normalized_row = []
-            for crit in criteria:
-                max_val = comparison_df[crit].max()
-                min_val = comparison_df[crit].min()
-                if max_val > min_val:
-                    norm_val = (row[crit] - min_val) / (max_val - min_val) * 100
-                else:
-                    norm_val = 100
-                normalized_row.append(norm_val)
-            normalized_data.append(normalized_row)
-        
-        # Créer le graphique radar
-        fig = go.Figure()
-        
-        for idx, scenario_name in enumerate(comparison_df["Scénario"]):
-            fig.add_trace(go.Scatterpolar(
-                r=normalized_data[idx] + [normalized_data[idx][0]],  # Fermer le polygone
-                theta=criteria + [criteria[0]],
-                name=scenario_name,
-                fill='toself'
-            ))
-        
-        fig.update_layout(
-            polar=dict(
-                radialaxis=dict(
-                    visible=True,
-                    range=[0, 100]
-                )
-            ),
-            showlegend=True,
-            title="Comparaison Multicritère des Scénarios",
-            height=500
+        fig_score.update_layout(
+            polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+            showlegend=False,
+            height=300,
+            width=300
         )
         
-        st.plotly_chart(fig, use_container_width=True)
-    
-    else:
-        st.info("👈 Lancez la simulation pour voir les résultats.")
+        st.plotly_chart(fig_score, use_container_width=True)
 
-# Onglet 5: Rapport & Export
 with tab5:
-    st.markdown('<h2 class="sub-header">Rapport & Export des Données</h2>', 
-                unsafe_allow_html=True)
+    st.header("📥 EXPORT DU RAPPORT COMPLET")
     
-    if st.session_state.comparison_df is not None:
-        # Génération du rapport
-        st.markdown("#### 📑 Génération du Rapport")
-        
-        report_name = st.text_input("Nom du rapport", "Rapport_PV_Batterie")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("📥 Générer Rapport PDF", type="primary", use_container_width=True):
-                # Code pour générer PDF
-                st.success("Rapport PDF généré avec succès !")
-                st.info("Le rapport a été sauvegardé dans le dossier 'reports/'")
-        
-        with col2:
-            if st.button("🗂️ Exporter Données Excel", use_container_width=True):
-                # Exporter vers Excel
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    st.session_state.comparison_df.to_excel(writer, 
-                                                          sheet_name='Comparaison_Scénarios', 
-                                                          index=False)
-                    
-                    # Ajouter les données détaillées
-                    for i, data in st.session_state.scenarios.items():
-                        df_detail = pd.DataFrame([data])
-                        df_detail.to_excel(writer, 
-                                         sheet_name=f'Scénario_{i}_Détail', 
-                                         index=False)
-                
-                buffer.seek(0)
-                
-                # Téléchargement
-                st.download_button(
-                    label="📥 Télécharger Excel",
-                    data=buffer,
-                    file_name=f"{report_name}_donnees.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-        
-        with col3:
-            if st.button("📈 Exporter Graphiques", use_container_width=True):
-                st.success("Graphiques exportés au format PNG")
-        
-        # Résumé du rapport
-        st.markdown("#### 📋 Résumé du Projet")
-        
-        if st.session_state.scenarios:
-            best_scenario_idx = st.session_state.comparison_df["Réduction réseau (%)"].idxmax()
-            best_scenario = st.session_state.scenarios[best_scenario_idx]
-            
-            st.markdown(f"""
-            **Configuration recommandée:**
-            - **Scénario:** {best_scenario['scenario_name']}
-            - **Production PV:** {best_scenario.get('pv_production_kwh', 0):,.0f} kWh/an
-            - **Batterie:** {best_scenario.get('battery_technology', 'Non')} {best_scenario.get('battery_capacity_kwh', 0)} kWh
-            - **Autoconsommation:** {best_scenario.get('self_consumption_percent', 0):.1f}%
-            - **Réduction réseau:** {best_scenario.get('grid_reduction_percent', 0):.1f}%
-            - **Économies annuelles estimées:** ${abs(best_scenario.get('energy_cost_usd', 0) - st.session_state.scenarios[0].get('energy_cost_usd', 0)):,.0f}
-            """)
-        
-        # Export des données brutes
-        st.markdown("#### 💾 Données Brutes")
-        
-        with st.expander("Afficher les données brutes"):
-            st.json(st.session_state.scenarios)
+    # Chemin des Téléchargements Windows
+    downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
     
-    else:
-        st.info("🟢 Lancez la simulation pour générer un rapport.")
+    # 1. Rapport Excel complet
+    st.subheader("📊 Exporter les Données Excel")
+    
+    # Créer un DataFrame complet
+    full_data = []
+    for key, data in SCENARIOS_DATA.items():
+        full_data.append({
+            "Scénario": key,
+            "Nom": data["name"],
+            "Description": data["description"],
+            "Énergie_PV_kWh": data["pv_energy"],
+            "Batterie_Charge_kWh": data["battery_charge"],
+            "Batterie_Décharge_kWh": data["battery_discharge"],
+            "Réseau_Import_kWh": data["grid_import"],
+            "Réseau_Export_kWh": data["grid_export"],
+            "Énergie_Perte_kWh": data["energy_lost"],
+            "Taux_Autoconsommation_%": data["self_consumption_rate"],
+            "Taux_Couverture_%": data["total_coverage"],
+            "Réduction_Réseau_%": data["grid_reduction"],
+            "Coût_Annuel_€": data["cost"],
+            "Technologie": data["tech"]
+        })
+    
+    df_full = pd.DataFrame(full_data)
+    
+    # Convertir en Excel
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Feuille 1: Résultats scénarios
+        df_full.to_excel(writer, sheet_name='Scénarios', index=False)
+        
+        # Feuille 2: Indicateurs système
+        system_data = {
+            "Paramètre": list(BASE_DATA.keys()),
+            "Valeur": list(BASE_DATA.values()),
+            "Unité": ["kWh/an", "kWh/an", "%", "kWh", "kWh", "heures", "%", "%", "%"]
+        }
+        pd.DataFrame(system_data).to_excel(writer, sheet_name='Système', index=False)
+        
+        # Feuille 3: Comparaison technologies
+        df_tech.to_excel(writer, sheet_name='Technologies', index=False)
+    
+    excel_data = output.getvalue()
+    excel_filename = f"rapport_pv_batterie_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    excel_path = os.path.join(downloads_path, excel_filename)
+    
+    st.download_button(
+        label="📥 Télécharger Excel Complet",
+        data=excel_data,
+        file_name=excel_filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Le fichier sera sauvegardé dans votre dossier Téléchargements"
+    )
+    
+    # 2. Rapport PDF/Text
+    st.subheader("📄 Générer le Rapport d'Analyse")
+    
+    rapport_content = f"""
+    RAPPORT D'ANALYSE - SYSTÈME PV + BATTERIE
+    =========================================
+    
+    Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}
+    
+    1. PARAMÈTRES DU SYSTÈME
+    -----------------------
+    • Consommation annuelle : {BASE_DATA['annual_consumption']:,.1f} kWh
+    • Production PV : {BASE_DATA['pv_production']:,.1f} kWh
+    • Taux couverture PV : {BASE_DATA['pv_coverage']}%
+    • Batterie : {BASE_DATA['battery_capacity']} kWh (Li-ion)
+    • Énergie utilisable : {BASE_DATA['battery_usable']} kWh
+    • Autonomie : {BASE_DATA['autonomy']} heures
+    • Couverture besoins nocturnes : {BASE_DATA['night_coverage']}%
+    • Autoconsommation estimée : {BASE_DATA['self_consumption']}%
+    • Réduction injection réseau : {BASE_DATA['grid_reduction']}%
+    
+    2. ANALYSE DES SCÉNARIOS
+    -----------------------
+    """
+    
+    for key, data in SCENARIOS_DATA.items():
+        rapport_content += f"""
+    {data['name']} ({key}) :
+      • Énergie PV : {data['pv_energy']:,.1f} kWh
+      • Batterie (charge/décharge) : {data['battery_charge']:,.1f} / {data['battery_discharge']:,.1f} kWh
+      • Réseau (import/export) : {data['grid_import']:,.1f} / {data['grid_export']:,.1f} kWh
+      • Pertes : {data['energy_lost']:,.1f} kWh
+      • Autoconsommation : {data['self_consumption_rate']}%
+      • Couverture totale : {data['total_coverage']}%
+      • Réduction réseau : {data['grid_reduction']}%
+      • Coût annuel : {data['cost']:,.1f} €
+        """
+    
+    best_scenario = df_scores.iloc[0]
+    best_data = SCENARIOS_DATA[best_scenario['Scénario']]
+    
+    rapport_content += f"""
+    
+    3. RECOMMANDATION
+    -----------------
+    Scénario recommandé : {best_scenario['Nom']} ({best_scenario['Scénario']})
+    Score global : {best_scenario['Score']}/100
+    
+    Configuration :
+    • Système PV : {pv_power} kWc
+    • Batterie : {best_data['tech']}
+    • Autonomie : {BASE_DATA['autonomy']} heures
+    
+    Performance :
+    • Réduction appel réseau : {best_data['grid_reduction']}%
+    • Autoconsommation : {best_data['self_consumption_rate']}%
+    • Couverture énergétique : {best_data['total_coverage']}%
+    • Économie annuelle : {671.9 - best_data['cost']:,.1f} €
+    
+    4. CONCLUSION
+    -------------
+    Le scénario {best_scenario['Scénario']} offre le meilleur compromis entre :
+    - Performance énergétique
+    - Réduction des coûts
+    - Autonomie du système
+    - Retour sur investissement
+    
+    Cette configuration permet une réduction de 90% de l'appel au réseau
+    tout en maximisant l'autoconsommation de l'énergie produite.
+    """
+    
+    txt_filename = f"rapport_analyse_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+    txt_path = os.path.join(downloads_path, txt_filename)
+    
+    st.download_button(
+        label="📥 Télécharger Rapport Texte",
+        data=rapport_content.encode('utf-8'),
+        file_name=txt_filename,
+        mime="text/plain",
+        help="Le rapport sera sauvegardé dans votre dossier Téléchargements"
+    )
+    
+    # 3. Résumé graphique
+    st.subheader("🖼️ Exporter les Graphiques")
+    
+    if st.button("📸 Capturer les Graphiques"):
+        st.info(f"Les graphiques peuvent être capturés via :")
+        st.markdown("""
+        1. **Capture d'écran** (Win + Shift + S)
+        2. **Téléchargement direct** (clic droit sur chaque graphique → Save image)
+        3. **Export PDF** via l'impression de la page (Ctrl + P)
+        
+        **Conseil :** Utilisez la fonction de capture Windows pour sauvegarder chaque graphique.
+        """)
+    
+    # Affichage du chemin
+    st.subheader("📁 Emplacement des Fichiers")
+    st.info(f"""
+    **Vos fichiers seront téléchargés dans :**
+    ```
+    {downloads_path}
+    ```
+    
+    **Fichiers générés :**
+    1. `{excel_filename}` - Données complètes Excel
+    2. `{txt_filename}` - Rapport d'analyse texte
+    
+    **Pour y accéder rapidement :**
+    - Ouvrez l'Explorateur de fichiers
+    - Allez dans "Téléchargements" dans la barre latérale
+    - Ou collez ce chemin : `{downloads_path}`
+    """)
 
 # Footer
 st.markdown("---")
 st.markdown("""
-<div style="text-align: center; color: #666;">
-    <p><strong>🔋 Simulateur PV + Batterie - Projet de Stockage d'Énergie Électrique</strong></p>
-    <p>Développé avec Streamlit • Données de référence: Rapport technique PV+Stockage</p>
-    <p>© 2024 - Pour usage académique</p>
+<div style="text-align: center; color: #666; font-size: 0.9rem;">
+    <p><strong>🔋 Simulateur PV + Batterie - Analyse Complète des Performances</strong></p>
+    <p>Tous les indicateurs énergétiques • Comparaison 5 scénarios • Recommandation optimale</p>
+    <p>© 2024 - Projet de stockage d'énergie électrique</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Fonction pour télécharger les données
-def get_table_download_link(df, filename):
-    """Génère un lien de téléchargement pour un DataFrame"""
-    csv = df.to_csv(index=False)
-    b64 = base64.b64encode(csv.encode()).decode()
-    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}">📥 Télécharger CSV</a>'
+# Initialisation de l'état
+if 'analyzed' not in st.session_state:
+    st.session_state.analyzed = False
 
-    return href
+# Message d'accueil
+if not st.session_state.analyzed:
+    st.info("👈 **Configurez les paramètres dans la sidebar et cliquez sur 'LANCER L'ANALYSE'**")
